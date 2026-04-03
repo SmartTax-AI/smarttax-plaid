@@ -14,7 +14,6 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-
 let ACCESS_TOKEN = null;
 let ITEM_ID = null;
 let transactionFeedback = {};
@@ -324,6 +323,59 @@ app.get("/api/mock-transactions", async (req, res) => {
     });
   }
 });
+app.post("/api/transaction/reject", async (req, res) => {
+  try {
+    const { transaction_id } = req.body;
+
+    if (!transaction_id) {
+      return res.status(400).json({ error: "transaction_id required" });
+    }
+
+    const manualUpdate = await db.query(
+      `
+      UPDATE manual_transactions
+      SET
+        status = 'rejected',
+        is_deductible = false,
+        deductible_label = 'Not Deductible',
+        deduction_amount = 0,
+        estimated_tax_savings = 0,
+        user_confirmed = false
+      WHERE id = $1
+      RETURNING *
+      `,
+      [transaction_id]
+    );
+
+    const classifiedUpdate = await db.query(
+      `
+      UPDATE classified_transactions
+      SET
+        status = 'rejected',
+        is_deductible = false,
+        deductible_label = 'Not Deductible',
+        deduction_amount = 0,
+        estimated_tax_savings = 0,
+        user_confirmed = false
+      WHERE transaction_id = $1
+      RETURNING *
+      `,
+      [transaction_id]
+    );
+
+    res.json({
+      success: true,
+      manual_updated: manualUpdate.rowCount,
+      classified_updated: classifiedUpdate.rowCount,
+    });
+  } catch (err) {
+    console.error("Reject transaction error:", err);
+    res.status(500).json({
+      error: "Failed to reject transaction",
+      details: err.message,
+    });
+  }
+});
 
 app.post("/api/transaction-feedback", async (req, res) => {
   try {
@@ -474,81 +526,177 @@ app.get("/api/plaid/transactions", async (req, res) => {
   try {
     console.log("transactions route hit");
 
-    const accessToken = await getSavedAccessToken();
+    const userId = "demo_user";
 
-    if (!accessToken) {
-      return res.status(400).json({
-        error: "No access token found. Connect bank first.",
-      });
-    }
+    const classifiedResult = await db.query(
+      `
+      SELECT *
+      FROM classified_transactions
+      WHERE user_id = $1
+      ORDER BY date DESC, created_at DESC
+      `,
+      [userId]
+    );
 
-    const response = await plaidClient.transactionsGet({
-      access_token: accessToken,
-      start_date: "2025-01-01",
-      end_date: "2026-12-31",
-    });
+    const classifiedTransactions = classifiedResult.rows.map((row) => ({
+      transaction_id: row.transaction_id,
+      name: row.name,
+      merchant_name: row.merchant_name,
+      amount: Number(row.amount),
+      date: row.date,
+      category: ["Plaid"],
+      auto_classification: row.auto_classification,
+      confidence_score: Number(row.confidence_score || 0),
+      status: row.status,
+      is_deductible: row.is_deductible,
+      deductible_label: row.deductible_label,
+      deduction_amount: Number(row.deduction_amount || 0),
+      tax_rate_applied: Number(row.tax_rate_applied || 0),
+      estimated_tax_savings: Number(row.estimated_tax_savings || 0),
+      user_confirmed: row.user_confirmed,
+      classification_signals: Array.isArray(row.classification_signals)
+        ? row.classification_signals
+        : typeof row.classification_signals === "string"
+        ? JSON.parse(row.classification_signals)
+        : [],
+    }));
 
-    const enrichedTransactions = response.data.transactions.map((transaction) => {
-      const classified = classifyTransaction(transaction);
-      const feedback = transactionFeedback[transaction.transaction_id];
+    const manualResult = await db.query(
+      `
+      SELECT *
+      FROM manual_transactions
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      `,
+      [userId]
+    );
 
-      let finalStatus = classified.status;
-      let finalDeductible = classified.is_deductible;
-      let finalLabel = classified.deductible_label;
-      let user_confirmed = classified.user_confirmed;
+    const manualTransactions = manualResult.rows.map((row) => ({
+      transaction_id: row.id,
+      name: row.description,
+      merchant_name: row.merchant_name,
+      amount: Number(row.amount),
+      date: row.date,
+      category: ["Manual Entry"],
+      auto_classification: row.auto_classification,
+      confidence_score: Number(row.confidence_score || 0),
+      status: row.status,
+      is_deductible: row.is_deductible,
+      deductible_label: row.deductible_label,
+      deduction_amount: Number(row.deduction_amount || 0),
+      tax_rate_applied: Number(row.tax_rate_applied || 0),
+      estimated_tax_savings: Number(row.estimated_tax_savings || 0),
+      user_confirmed: row.user_confirmed,
+      classification_signals: Array.isArray(row.classification_signals)
+        ? row.classification_signals
+        : typeof row.classification_signals === "string"
+        ? JSON.parse(row.classification_signals)
+        : [],
+    }));
 
-      if (feedback) {
-        user_confirmed = feedback.user_confirmed;
+    const allTransactions = [...manualTransactions, ...classifiedTransactions].sort(
+      (a, b) => new Date(b.date) - new Date(a.date)
+    );
 
-        if (feedback.user_confirmed === true) {
-          finalStatus = "confirmed";
-          finalDeductible = true;
-          finalLabel = classified.deductible_label;
-        } else if (feedback.user_confirmed === false) {
-          finalStatus = "rejected";
-          finalDeductible = false;
-          finalLabel = "Not Deductible";
-        }
-      }
-
-      return {
-        transaction_id: transaction.transaction_id,
-        name: transaction.name,
-        merchant_name: transaction.merchant_name,
-        amount: transaction.amount,
-        date: transaction.date,
-        category: transaction.category,
-        auto_classification: classified.category,
-        confidence_score: classified.confidence_score,
-        status: finalStatus,
-        is_deductible: finalDeductible,
-        deductible_label: finalLabel,
-        deduction_amount: finalDeductible ? classified.deduction_amount : 0,
-        tax_rate_applied: classified.tax_rate_applied,
-        estimated_tax_savings: finalDeductible ? classified.estimated_tax_savings : 0,
-        user_confirmed,
-        classification_signals: classified.classification_signals,
-      };
-    });
-
-    console.log("transactions success:", enrichedTransactions.length);
+    console.log("transactions success:", allTransactions.length);
 
     res.json({
       success: true,
-      total_transactions: response.data.total_transactions,
-      transactions: enrichedTransactions,
+      total_transactions: allTransactions.length,
+      transactions: allTransactions,
     });
   } catch (error) {
-    console.error(
-      "TRANSACTIONS ERROR FULL:",
-      error.response?.data || error.message || error
-    );
+    console.error("TRANSACTIONS ERROR FULL:", error.message || error);
     res.status(500).json({
       error: "Failed to fetch transactions",
-      details: error.response?.data || error.message || "Unknown error",
+      details: error.message || "Unknown error",
     });
   }
 });
+
+app.get("/api/plaid/export-csv", async (req, res) => {
+  try {
+    const userId = "demo_user";
+
+    const classifiedResult = await db.query(
+      `
+      SELECT *
+      FROM classified_transactions
+      WHERE user_id = $1
+      ORDER BY date DESC, created_at DESC
+      `,
+      [userId]
+    );
+
+    const classifiedTransactions = classifiedResult.rows.map((row) => ({
+      date: row.date,
+      name: row.name,
+      merchant: row.merchant_name || "",
+      amount: Number(row.amount),
+      source: "Plaid",
+      category: row.auto_classification || "",
+      status: row.status || "",
+      deductible: row.deductible_label || "",
+      tax_savings: Number(row.estimated_tax_savings || 0),
+      confidence: Number(row.confidence_score || 0),
+      user_confirmed: row.user_confirmed,
+    }));
+
+    const manualResult = await db.query(
+      `
+      SELECT *
+      FROM manual_transactions
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      `,
+      [userId]
+    );
+
+    const manualTransactions = manualResult.rows.map((row) => ({
+      date: row.date,
+      name: row.description,
+      merchant: row.merchant_name || "",
+      amount: Number(row.amount),
+      source: "Manual Entry",
+      category: row.auto_classification || "",
+      status: row.status || "",
+      deductible: row.deductible_label || "",
+      tax_savings: Number(row.estimated_tax_savings || 0),
+      confidence: Number(row.confidence_score || 0),
+      user_confirmed: row.user_confirmed,
+    }));
+
+    const rows = [...manualTransactions, ...classifiedTransactions].sort(
+      (a, b) => new Date(b.date) - new Date(a.date)
+    );
+
+    if (!rows.length) {
+      return res.status(200).send(
+        "date,name,merchant,amount,source,category,status,deductible,tax_savings,confidence,user_confirmed\n"
+      );
+    }
+
+    const headers = Object.keys(rows[0]).join(",");
+    const csv = [
+      headers,
+      ...rows.map((row) =>
+        Object.values(row)
+          .map((val) => `"${String(val ?? "").replace(/"/g, '""')}"`)
+          .join(",")
+      ),
+    ].join("\n");
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=transactions.csv");
+    res.send(csv);
+  } catch (error) {
+    console.error("CSV EXPORT ERROR:", error.message);
+    res.status(500).json({
+      error: "Failed to export CSV",
+    });
+  }
+});
+
 
 // Test DB
 app.get("/api/test-db", async (req, res) => {
@@ -579,7 +727,93 @@ app.get("/api/plaid/db-items", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch db items" });
   }
 });
+// ✅ STEP 1: put helper HERE (top section of file)
 
+const syncTransactionsToDb = async (userId, accessToken) => {
+  const response = await plaidClient.transactionsSync({
+    access_token: accessToken,
+  });
+
+  const added = response.data.added || [];
+
+  for (const tx of added) {
+    const classification = classifyTransaction(tx);
+
+    await db.query(
+      `
+      INSERT INTO classified_transactions (
+        id,
+        transaction_id,
+        user_id,
+        name,
+        merchant_name,
+        amount,
+        date,
+        auto_classification,
+        confidence_score,
+        status,
+        is_deductible,
+        deductible_label,
+        deduction_amount,
+        tax_rate_applied,
+        estimated_tax_savings,
+        user_confirmed,
+        classification_signals,
+        created_at
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW()
+      )
+      ON CONFLICT (transaction_id)
+      DO NOTHING
+      `,
+      [
+        `classified_${tx.transaction_id}`,
+        tx.transaction_id,
+        userId,
+        tx.name,
+        tx.merchant_name || tx.name,
+        tx.amount,
+        tx.date,
+        classification.category,
+        classification.confidence_score,
+        classification.status,
+        classification.is_deductible,
+        classification.deductible_label,
+        classification.deduction_amount || 0,
+        classification.tax_rate_applied || 0,
+        classification.estimated_tax_savings || 0,
+        classification.user_confirmed ?? null,
+        JSON.stringify(classification.classification_signals || []),
+      ]
+    );
+  }
+
+  return { added_count: added.length };
+};
+app.post("/api/plaid/sync-transactions", async (req, res) => {
+  try {
+    const accessToken = await getSavedAccessToken();
+
+    if (!accessToken) {
+      return res.status(400).json({
+        error: "No access token found. Connect bank first.",
+      });
+    }
+
+    const result = await syncTransactionsToDb("demo_user", accessToken);
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error("SYNC ERROR:", error.response?.data || error.message || error);
+    res.status(500).json({
+      error: "Failed to sync transactions",
+      details: error.response?.data || error.message || "Unknown error",
+    });
+  }
+});
 // Webhook
 app.post("/api/plaid/webhook", async (req, res) => {
   const plaidVerificationToken = req.headers["plaid-verification"];
@@ -633,9 +867,9 @@ app.post("/api/plaid/webhook", async (req, res) => {
         "HISTORICAL_UPDATE",
       ].includes(webhook_code)
     ) {
-      syncTransactions(user_id, access_token, item_id).catch((error) =>
-        console.error(`Webhook sync failed for ${user_id}:`, error.message)
-      );
+      syncTransactionsToDb(user_id, access_token).catch((error) =>
+  console.error(`Webhook sync failed for ${user_id}:`, error.message)
+);
     }
   }
 
@@ -675,6 +909,131 @@ async function syncTransactions(userId, accessToken, itemId) {
     [cursor, itemId]
   );
 
+  for (const tx of added) {
+    const classified = classifyTransaction(tx);
+
+    await db.query(
+      `
+      INSERT INTO classified_transactions (
+        id,
+        user_id,
+        item_id,
+        transaction_id,
+        name,
+        merchant_name,
+        amount,
+        date,
+        auto_classification,
+        confidence_score,
+        status,
+        is_deductible,
+        deductible_label,
+        deduction_amount,
+        tax_rate_applied,
+        estimated_tax_savings,
+        user_confirmed,
+        classification_signals,
+        source,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+        $11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),NOW()
+      )
+      ON CONFLICT (transaction_id)
+      DO UPDATE SET
+        name = EXCLUDED.name,
+        merchant_name = EXCLUDED.merchant_name,
+        amount = EXCLUDED.amount,
+        date = EXCLUDED.date,
+        auto_classification = EXCLUDED.auto_classification,
+        confidence_score = EXCLUDED.confidence_score,
+        status = EXCLUDED.status,
+        is_deductible = EXCLUDED.is_deductible,
+        deductible_label = EXCLUDED.deductible_label,
+        deduction_amount = EXCLUDED.deduction_amount,
+        tax_rate_applied = EXCLUDED.tax_rate_applied,
+        estimated_tax_savings = EXCLUDED.estimated_tax_savings,
+        user_confirmed = EXCLUDED.user_confirmed,
+        classification_signals = EXCLUDED.classification_signals,
+        updated_at = NOW()
+      `,
+      [
+        tx.transaction_id,
+        userId,
+        itemId,
+        tx.transaction_id,
+        tx.name,
+        tx.merchant_name,
+        tx.amount,
+        tx.date,
+        classified.category,
+        classified.confidence_score,
+        classified.status,
+        classified.is_deductible,
+        classified.deductible_label,
+        classified.deduction_amount,
+        classified.tax_rate_applied,
+        classified.estimated_tax_savings,
+        classified.user_confirmed,
+        JSON.stringify(classified.classification_signals),
+        "plaid",
+      ]
+    );
+  }
+
+  for (const tx of modified) {
+    const classified = classifyTransaction(tx);
+
+    await db.query(
+      `
+      UPDATE classified_transactions
+      SET
+        name = $1,
+        merchant_name = $2,
+        amount = $3,
+        date = $4,
+        auto_classification = $5,
+        confidence_score = $6,
+        status = $7,
+        is_deductible = $8,
+        deductible_label = $9,
+        deduction_amount = $10,
+        tax_rate_applied = $11,
+        estimated_tax_savings = $12,
+        user_confirmed = $13,
+        classification_signals = $14,
+        updated_at = NOW()
+      WHERE transaction_id = $15
+      `,
+      [
+        tx.name,
+        tx.merchant_name,
+        tx.amount,
+        tx.date,
+        classified.category,
+        classified.confidence_score,
+        classified.status,
+        classified.is_deductible,
+        classified.deductible_label,
+        classified.deduction_amount,
+        classified.tax_rate_applied,
+        classified.estimated_tax_savings,
+        classified.user_confirmed,
+        JSON.stringify(classified.classification_signals),
+        tx.transaction_id,
+      ]
+    );
+  }
+
+  for (const tx of removed) {
+    await db.query(
+      "DELETE FROM classified_transactions WHERE transaction_id = $1",
+      [tx.transaction_id]
+    );
+  }
+
   console.log(
     `[${userId}] Sync complete: +${added.length} added, ${modified.length} modified, ${removed.length} removed`
   );
@@ -698,6 +1057,283 @@ app.get("/reset-bank", async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).send("Failed to reset bank");
+  }
+});
+
+app.post("/api/plaid/sandbox/fire-webhook", async (req, res) => {
+  try {
+    const accessToken = await getSavedAccessToken();
+
+    if (!accessToken) {
+      return res.status(400).json({
+        error: "No access token found. Connect bank first.",
+      });
+    }
+
+    const result = await plaidClient.sandboxItemFireWebhook({
+      access_token: accessToken,
+      webhook_code: "SYNC_UPDATES_AVAILABLE",
+    });
+
+    res.json({
+      success: true,
+      result: result.data,
+    });
+  } catch (error) {
+    console.error("SANDBOX WEBHOOK ERROR:", error.response?.data || error.message || error);
+    res.status(500).json({
+      error: "Failed to fire sandbox webhook",
+      details: error.response?.data || error.message || "Unknown error",
+    });
+  }
+});
+
+app.post("/api/manual-entry", async (req, res) => {
+  try {
+    const { description, amount } = req.body;
+
+    if (!description || typeof amount !== "number") {
+      return res.status(400).json({
+        error: "description and amount are required",
+      });
+    }
+
+    const fakeTransaction = {
+      transaction_id: `manual_${Date.now()}`,
+      name: description,
+      merchant_name: description,
+      amount,
+      date: new Date().toISOString().slice(0, 10),
+      category: ["Manual Entry"],
+    };
+
+    const classified = classifyTransaction(fakeTransaction);
+
+    return res.json({
+      success: true,
+      transaction: {
+        ...fakeTransaction,
+        auto_classification: classified.category,
+        confidence_score: classified.confidence_score,
+        status: classified.status,
+        is_deductible: classified.is_deductible,
+        deductible_label: classified.deductible_label,
+        deduction_amount: classified.deduction_amount,
+        tax_rate_applied: classified.tax_rate_applied,
+        estimated_tax_savings: classified.estimated_tax_savings,
+        classification_signals: classified.classification_signals,
+      },
+    });
+  } catch (error) {
+    console.error("MANUAL ENTRY ERROR:", error.message);
+    res.status(500).json({
+      error: "Failed to add manual entry",
+    });
+  }
+});
+
+app.post("/api/manual-transaction", async (req, res) => {
+  try {
+    const { description, amount, date, merchant_name } = req.body;
+
+    if (!description || typeof amount !== "number" || !date) {
+      return res.status(400).json({
+        error: "description, amount, and date are required",
+      });
+    }
+
+    const manualTx = {
+      transaction_id: `manual_${Date.now()}`,
+      name: description,
+      merchant_name: merchant_name || description,
+      amount,
+      date,
+      category: ["Manual Entry"],
+    };
+
+    const classification = classifyTransaction(manualTx);
+
+    const result = await db.query(
+      `INSERT INTO manual_transactions (
+        id,
+        user_id,
+        description,
+        amount,
+        date,
+        merchant_name,
+        auto_classification,
+        confidence_score,
+        status,
+        is_deductible,
+        deductible_label,
+        deduction_amount,
+        tax_rate_applied,
+        estimated_tax_savings,
+        user_confirmed,
+        classification_signals
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+      ) RETURNING *`,
+      [
+        manualTx.transaction_id,
+        "demo_user",
+        description,
+        amount,
+        date,
+        manualTx.merchant_name,
+        classification.category,
+        classification.confidence_score,
+        classification.status,
+        classification.is_deductible,
+        classification.deductible_label,
+        classification.deduction_amount,
+        classification.tax_rate_applied,
+        classification.estimated_tax_savings,
+        classification.user_confirmed,
+        JSON.stringify(classification.classification_signals),
+      ]
+    );
+
+    res.json({
+      success: true,
+      transaction: result.rows[0],
+    });
+  } catch (err) {
+    console.error("Manual transaction error:", err);
+    res.status(500).json({
+      error: "Failed to save transaction",
+      details: err.message,
+    });
+  }
+});
+
+
+app.get("/test-manual", async (req, res) => {
+  try {
+    const response = await fetch("http://localhost:3001/api/manual-transaction", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        description: "Adobe subscription",
+        amount: 50,
+        date: "2026-04-02",
+        merchant_name: "Adobe",
+      }),
+    });
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("test failed");
+  }
+});
+
+app.get("/create-table", async (req, res) => {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS manual_transactions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        description TEXT NOT NULL,
+        amount NUMERIC NOT NULL,
+        date DATE NOT NULL,
+        merchant_name TEXT,
+        auto_classification TEXT,
+        confidence_score NUMERIC,
+        status TEXT,
+        is_deductible BOOLEAN,
+        deductible_label TEXT,
+        deduction_amount NUMERIC,
+        tax_rate_applied NUMERIC,
+        estimated_tax_savings NUMERIC,
+        user_confirmed BOOLEAN,
+        classification_signals JSONB,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    res.send("table created successfully");
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("error creating table");
+  }
+});
+app.get("/create-classified-table", async (req, res) => {
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS classified_transactions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        item_id TEXT,
+        transaction_id TEXT UNIQUE,
+        name TEXT,
+        merchant_name TEXT,
+        amount NUMERIC NOT NULL,
+        date DATE NOT NULL,
+        auto_classification TEXT,
+        confidence_score NUMERIC,
+        status TEXT,
+        is_deductible BOOLEAN,
+        deductible_label TEXT,
+        deduction_amount NUMERIC,
+        tax_rate_applied NUMERIC,
+        estimated_tax_savings NUMERIC,
+        user_confirmed BOOLEAN,
+        classification_signals JSONB,
+        source TEXT DEFAULT 'plaid',
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    res.send("classified_transactions table created successfully");
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("error creating classified_transactions table");
+  }
+});
+app.post("/api/transaction/confirm", async (req, res) => {
+  try {
+    const { transaction_id } = req.body;
+
+    if (!transaction_id) {
+      return res.status(400).json({ error: "transaction_id required" });
+    }
+
+    // Update BOTH tables (safe approach)
+    await db.query(
+      `
+      UPDATE manual_transactions
+      SET 
+        status = 'confirmed',
+        is_deductible = true,
+        deduction_amount = amount,
+        estimated_tax_savings = amount * 0.3
+      WHERE id = $1
+      `,
+      [transaction_id]
+    );
+
+    await db.query(
+      `
+      UPDATE classified_transactions
+      SET 
+        status = 'confirmed',
+        is_deductible = true,
+        deduction_amount = amount,
+        estimated_tax_savings = amount * 0.3
+      WHERE transaction_id = $1
+      `,
+      [transaction_id]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to confirm transaction" });
   }
 });
 
