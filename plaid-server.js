@@ -22,15 +22,25 @@ let transactionFeedback = {};
 app.use("/api/plaid/webhook", express.raw({ type: "application/json" }));
 app.use(express.json());
 
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:8080",
+  "http://localhost:5173",
+  "https://main.d31qyojvcmiqs.amplifyapp.com",
+];
+
 app.use(
   cors({
-    origin: [
-      "http://localhost:3000",
-      "http://localhost:8080",
-      "http://localhost:5173",
-      "https://main.d31qyojvcmiqs.amplifyapp.com"
-    ],
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
