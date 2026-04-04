@@ -617,7 +617,7 @@ app.get("/api/plaid/transactions", async (req, res) => {
 
 app.get("/api/plaid/export-csv", async (req, res) => {
   try {
-    const userId = "demo_user";
+    const userId = "test-user-123";
 
     const classifiedResult = await db.query(
       `
@@ -801,7 +801,7 @@ app.post("/api/plaid/sync-transactions", async (req, res) => {
       });
     }
 
-    const result = await syncTransactionsToDb("demo_user", accessToken);
+    const result = await syncTransactionsToDb("test-user-123", accessToken);
 
     res.json({
       success: true,
@@ -1177,7 +1177,7 @@ app.post("/api/manual-transaction", async (req, res) => {
       ) RETURNING *`,
       [
         manualTx.transaction_id,
-        "demo_user",
+        "test-user-123",
         description,
         amount,
         date,
