@@ -727,6 +727,30 @@ app.get("/api/plaid/export-csv", async (req, res) => {
   }
 });
 
+app.post("/api/plaid/update-transaction-status", async (req, res) => {
+  try {
+    const { transactionId, status, userId } = req.body;
+
+    if (!transactionId || !status || !userId) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    // 🔥 Update in DB (adjust table name if needed)
+    const result = await db.query(
+      `UPDATE transactions
+       SET status = $1
+       WHERE transaction_id = $2 AND user_id = $3
+       RETURNING *`,
+      [status, transactionId, userId]
+    );
+
+    return res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update transaction" });
+  }
+});
+
 // Test DB
 app.get("/api/test-db", async (req, res) => {
   try {
