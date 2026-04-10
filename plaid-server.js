@@ -21,6 +21,11 @@ const allowedOrigins = [
   "http://localhost:5173",
   "https://main.d31qyojvcmiiqs.amplifyapp.com",
 ];
+const OpenAI = require("openai");
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 const corsOptions = {
   origin(origin, callback) {
@@ -231,6 +236,39 @@ function classifyTransaction(transaction) {
     user_confirmed,
     classification_signals,
   };
+}
+
+async function getAISuggestion(transaction) {
+  try {
+    const prompt = `
+You are a tax assistant.
+
+Transaction:
+Merchant: ${transaction.merchant_name || transaction.name}
+Amount: ${transaction.amount}
+Category: ${transaction.category?.[0] || "Unknown"}
+
+Answer in JSON:
+{
+  "is_deductible": true/false,
+  "confidence": number (0 to 1),
+  "reason": "short explanation"
+}
+`;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+    });
+
+    const text = response.choices[0].message.content;
+
+    return JSON.parse(text);
+  } catch (err) {
+    console.error("AI ERROR:", err.message);
+    return null;
+  }
 }
 
 async function getSavedAccessToken(userId) {
@@ -802,7 +840,16 @@ const syncTransactionsToDb = async (userId, accessToken) => {
   const added = response.data.added || [];
 
   for (const tx of added) {
-    const classification = classifyTransaction(tx);
+    const ruleBased = classifyTransaction(tx);
+    const ai = await getAISuggestion(tx);
+
+    let finalConfidence = ruleBased.confidence_score;
+    let aiReason = null;
+
+    if (ai) {
+      finalConfidence = (ruleBased.confidence_score + ai.confidence) / 2;
+      aiReason = ai.reason;
+    }
 
     await db.query(
       `
@@ -839,16 +886,19 @@ const syncTransactionsToDb = async (userId, accessToken) => {
         tx.merchant_name || tx.name,
         tx.amount,
         tx.date,
-        classification.category,
-        classification.confidence_score,
-        classification.status,
-        classification.is_deductible,
-        classification.deductible_label,
-        classification.deduction_amount || 0,
-        classification.tax_rate_applied || 0,
-        classification.estimated_tax_savings || 0,
-        classification.user_confirmed ?? null,
-        JSON.stringify(classification.classification_signals || []),
+        ruleBased.category,
+        finalConfidence,
+        ruleBased.status,
+        ruleBased.is_deductible,
+        ruleBased.deductible_label,
+        ruleBased.deduction_amount || 0,
+        ruleBased.tax_rate_applied || 0,
+        ruleBased.estimated_tax_savings || 0,
+        ruleBased.user_confirmed ?? null,
+        JSON.stringify({
+          signals: ruleBased.classification_signals || [],
+          ai_reason: null,
+        }),
       ]
     );
   }
@@ -1276,7 +1326,10 @@ app.post("/api/manual-transaction", async (req, res) => {
         classification.tax_rate_applied,
         classification.estimated_tax_savings,
         classification.user_confirmed,
-        JSON.stringify(classification.classification_signals),
+JSON.stringify({
+  signals: classification.classification_signals || [],
+  ai_reason: null,
+}),
       ]
     );
 
