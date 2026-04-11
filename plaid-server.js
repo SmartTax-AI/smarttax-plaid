@@ -362,54 +362,7 @@ app.get("/api/mock-transactions", async (req, res) => {
   }
 });
 
-app.post("/api/transaction/confirm", async (req, res) => {
-  try {
-    const { userId, transaction_id } = req.body;
 
-    if (!userId || !transaction_id) {
-      return res.status(400).json({ error: "userId and transaction_id required" });
-    }
-
-    const manualUpdate = await db.query(
-      `
-      UPDATE manual_transactions
-      SET
-        status = 'confirmed',
-        user_confirmed = true,
-        updated_at = NOW()
-      WHERE id = $1 AND user_id = $2
-      RETURNING *
-      `,
-      [transaction_id, userId]
-    );
-
-    const classifiedUpdate = await db.query(
-      `
-      UPDATE classified_transactions
-      SET
-        status = 'confirmed',
-        user_confirmed = true,
-        updated_at = NOW()
-      WHERE transaction_id = $1 AND user_id = $2
-      RETURNING *
-      `,
-      [transaction_id, userId]
-    );
-
-    return res.json({
-      success: true,
-      manual_updated: manualUpdate.rowCount,
-      classified_updated: classifiedUpdate.rowCount,
-      transaction: manualUpdate.rows[0] || classifiedUpdate.rows[0] || null,
-    });
-  } catch (err) {
-    console.error("Confirm transaction error:", err);
-    return res.status(500).json({
-      error: "Failed to confirm transaction",
-      details: err.message,
-    });
-  }
-});
 
 app.post("/api/transaction/reject", async (req, res) => {
   try {
