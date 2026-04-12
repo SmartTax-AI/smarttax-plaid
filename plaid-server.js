@@ -373,21 +373,20 @@ app.post("/api/transaction/reject", async (req, res) => {
     }
 
     const manualUpdate = await db.query(
-      `
-      UPDATE manual_transactions
-      SET
-        status = 'rejected',
-        is_deductible = false,
-        deductible_label = 'Not Deductible',
-        deduction_amount = 0,
-        estimated_tax_savings = 0,
-        user_confirmed = false,
-        updated_at = NOW()
-      WHERE id = $1 AND user_id = $2
-      RETURNING *
-      `,
-      [transaction_id, userId]
-    );
+  `
+  UPDATE manual_transactions
+  SET
+    status = 'rejected',
+    is_deductible = false,
+    deductible_label = 'Not Deductible',
+    deduction_amount = 0,
+    estimated_tax_savings = 0,
+    user_confirmed = false
+  WHERE id = $1 AND user_id = $2
+  RETURNING *
+  `,
+  [transaction_id, userId]
+);
 
     const classifiedUpdate = await db.query(
       `
