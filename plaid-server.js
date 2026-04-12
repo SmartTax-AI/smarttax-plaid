@@ -792,21 +792,20 @@ app.post("/api/plaid/update-transaction-status", async (req, res) => {
     const isConfirmed = status === "confirmed";
 
     const manualUpdate = await db.query(
-      `
-      UPDATE manual_transactions
-      SET
-        status = $1,
-        user_confirmed = $2,
-        is_deductible = CASE WHEN $2 = false THEN false ELSE is_deductible END,
-        deductible_label = CASE WHEN $2 = false THEN 'Not Deductible' ELSE deductible_label END,
-        deduction_amount = CASE WHEN $2 = false THEN 0 ELSE deduction_amount END,
-        estimated_tax_savings = CASE WHEN $2 = false THEN 0 ELSE estimated_tax_savings END,
-        updated_at = NOW()
-      WHERE id = $3 AND user_id = $4
-      RETURNING *
-      `,
-      [status, isConfirmed, transactionId, userId]
-    );
+  `
+  UPDATE manual_transactions
+  SET
+    status = $1,
+    user_confirmed = $2,
+    is_deductible = CASE WHEN $2 = false THEN false ELSE is_deductible END,
+    deductible_label = CASE WHEN $2 = false THEN 'Not Deductible' ELSE deductible_label END,
+    deduction_amount = CASE WHEN $2 = false THEN 0 ELSE deduction_amount END,
+    estimated_tax_savings = CASE WHEN $2 = false THEN 0 ELSE estimated_tax_savings END
+  WHERE id = $3 AND user_id = $4
+  RETURNING *
+  `,
+  [status, isConfirmed, transactionId, userId]
+);
 
     const classifiedUpdate = await db.query(
       `
@@ -1547,17 +1546,16 @@ app.post("/api/transaction/confirm", async (req, res) => {
     }
 
     const manualUpdate = await db.query(
-      `
-      UPDATE manual_transactions
-      SET
-        status = 'confirmed',
-        user_confirmed = true,
-        updated_at = NOW()
-      WHERE id = $1 AND user_id = $2
-      RETURNING *
-      `,
-      [transaction_id, userId]
-    );
+  `
+  UPDATE manual_transactions
+  SET
+    status = 'confirmed',
+    user_confirmed = true
+  WHERE id = $1 AND user_id = $2
+  RETURNING *
+  `,
+  [transaction_id, userId]
+);
 
     const classifiedUpdate = await db.query(
       `
