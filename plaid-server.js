@@ -1692,6 +1692,88 @@ if (updatedTx) {
   }
 });
 
+app.post("/api/reclassify-all", async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const result = await db.query(
+      `
+      SELECT *
+      FROM classified_transactions
+      WHERE user_id = $1
+      ORDER BY date DESC, updated_at DESC NULLS LAST, created_at DESC
+      `,
+      [userId]
+    );
+
+    let updatedCount = 0;
+
+    for (const tx of result.rows) {
+      const reclassified = await classifyTransaction(
+        {
+          transaction_id: tx.transaction_id,
+          name: tx.name,
+          merchant_name: tx.merchant_name,
+          amount: Number(tx.amount || 0),
+          date: tx.date,
+          category: [tx.auto_classification || "Unknown"],
+        },
+        userId
+      );
+
+      await db.query(
+        `
+        UPDATE classified_transactions
+        SET
+          auto_classification = $1,
+          confidence_score = $2,
+          is_deductible = $3,
+          deductible_label = $4,
+          deduction_amount = $5,
+          tax_rate_applied = $6,
+          estimated_tax_savings = $7,
+          classification_signals = $8,
+          updated_at = NOW()
+        WHERE transaction_id = $9
+          AND user_id = $10
+        `,
+        [
+          reclassified.category,
+          reclassified.confidence_score,
+          reclassified.is_deductible,
+          reclassified.deductible_label,
+          reclassified.deduction_amount,
+          reclassified.tax_rate_applied,
+          reclassified.estimated_tax_savings,
+          JSON.stringify({
+            signals: reclassified.classification_signals || [],
+            ai_reason: null,
+          }),
+          tx.transaction_id,
+          userId,
+        ]
+      );
+
+      updatedCount += 1;
+    }
+
+    return res.json({
+      success: true,
+      updatedCount,
+    });
+  } catch (err) {
+    console.error("Reclassify all error:", err);
+    return res.status(500).json({
+      error: "Failed to reclassify transactions",
+      details: err.message,
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`SmartTax Plaid backend running on :${PORT}`);
 });
