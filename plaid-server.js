@@ -19,7 +19,7 @@ const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:8080",
   "http://localhost:5173",
-  "https://main.d31qyojvcmiiqs.amplifyapp.com",
+  "process.env.FRONTEND_URL",
 ];
 const OpenAI = require("openai");
 
