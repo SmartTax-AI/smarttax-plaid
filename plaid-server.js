@@ -591,13 +591,15 @@ app.post("/api/plaid/exchange_public_token", async (req, res) => {
 
     console.log("Saved Plaid item in DB for user:", userId);
 
-    // 🔥 run sync immediately here
-    res.json({
-  success: true,
-  item_id: itemId
-});
+    const syncResult = await syncTransactionsToDb(userId, accessToken, itemId, null);
 
-    
+    console.log("Initial sync result:", syncResult);
+
+    res.json({
+      success: true,
+      item_id: itemId,
+      sync: syncResult,
+    });
   } catch (error) {
     console.error(
       "EXCHANGE TOKEN ERROR FULL:",
