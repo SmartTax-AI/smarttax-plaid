@@ -963,14 +963,19 @@ const syncTransactionsToDb = async (userId, accessToken) => {
   let cursor = null;
   let hasMore = true;
   const added = [];
+  const modified = [];
+  const removed = [];
 
   while (hasMore) {
     const response = await plaidClient.transactionsSync({
       access_token: accessToken,
       cursor: cursor || undefined,
+      options: { include_personal_finance_category: true },
     });
 
     added.push(...(response.data.added || []));
+    modified.push(...(response.data.modified || []));
+    removed.push(...(response.data.removed || []));
     hasMore = response.data.has_more;
     cursor = response.data.next_cursor;
   }
@@ -1007,12 +1012,28 @@ const syncTransactionsToDb = async (userId, accessToken) => {
         estimated_tax_savings,
         user_confirmed,
         classification_signals,
-        created_at
+        created_at,
+        updated_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW()
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),NOW()
       )
-      ON CONFLICT (user_id, transaction_id)
-      DO NOTHING
+      ON CONFLICT (transaction_id)
+      DO UPDATE SET
+        name = EXCLUDED.name,
+        merchant_name = EXCLUDED.merchant_name,
+        amount = EXCLUDED.amount,
+        date = EXCLUDED.date,
+        auto_classification = EXCLUDED.auto_classification,
+        confidence_score = EXCLUDED.confidence_score,
+        status = EXCLUDED.status,
+        is_deductible = EXCLUDED.is_deductible,
+        deductible_label = EXCLUDED.deductible_label,
+        deduction_amount = EXCLUDED.deduction_amount,
+        tax_rate_applied = EXCLUDED.tax_rate_applied,
+        estimated_tax_savings = EXCLUDED.estimated_tax_savings,
+        user_confirmed = EXCLUDED.user_confirmed,
+        classification_signals = EXCLUDED.classification_signals,
+        updated_at = NOW()
       `,
       [
         `classified_${tx.transaction_id}`,
@@ -1039,10 +1060,75 @@ const syncTransactionsToDb = async (userId, accessToken) => {
     );
   }
 
-  console.log("TOTAL TRANSACTIONS FETCHED:", added.length);
-  console.log(`[${userId}] inserted from syncTransactionsToDb:`, added.length);
+  for (const tx of modified) {
+    const ruleBased = await classifyTransaction(tx, userId);
+    const ai = await getAISuggestion(tx);
 
-  return { added_count: added.length };
+    let finalConfidence = ruleBased.confidence_score;
+    let aiReason = null;
+
+    if (ai) {
+      finalConfidence = (ruleBased.confidence_score + ai.confidence) / 2;
+      aiReason = ai.reason;
+    }
+
+    await db.query(
+      `
+      UPDATE classified_transactions
+      SET
+        name = $1,
+        merchant_name = $2,
+        amount = $3,
+        date = $4,
+        auto_classification = $5,
+        confidence_score = $6,
+        status = $7,
+        is_deductible = $8,
+        deductible_label = $9,
+        deduction_amount = $10,
+        tax_rate_applied = $11,
+        estimated_tax_savings = $12,
+        user_confirmed = $13,
+        classification_signals = $14,
+        updated_at = NOW()
+      WHERE transaction_id = $15 AND user_id = $16
+      `,
+      [
+        tx.name,
+        tx.merchant_name || tx.name,
+        tx.amount,
+        tx.date,
+        ruleBased.category,
+        finalConfidence,
+        ruleBased.status,
+        ruleBased.is_deductible,
+        ruleBased.deductible_label,
+        ruleBased.deduction_amount || 0,
+        ruleBased.tax_rate_applied || 0,
+        ruleBased.estimated_tax_savings || 0,
+        ruleBased.user_confirmed ?? null,
+        JSON.stringify({
+          signals: ruleBased.classification_signals || [],
+          ai_reason: aiReason,
+        }),
+        tx.transaction_id,
+        userId,
+      ]
+    );
+  }
+
+  for (const tx of removed) {
+    await db.query(
+      `DELETE FROM classified_transactions WHERE transaction_id = $1 AND user_id = $2`,
+      [tx.transaction_id, userId]
+    );
+  }
+
+  return {
+    added_count: added.length,
+    modified_count: modified.length,
+    removed_count: removed.length,
+  };
 };
 
 app.post("/api/plaid/sync-transactions", async (req, res) => {
