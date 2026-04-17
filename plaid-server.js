@@ -15,32 +15,38 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const allowedOrigins = [
-  "http://localhost:3000",
-  "http://localhost:8080",
-  "http://localhost:5173",
-  process.env.FRONTEND_URL,
-].filter(Boolean);
-
 const OpenAI = require("openai");
 
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:8080",
+  "http://localhost:5173",
+  process.env.FRONTEND_URL,
+]
+  .filter(Boolean)
+  .map((o) => o.trim());
+
 const corsOptions = {
   origin(origin, callback) {
     if (!origin) return callback(null, true);
 
+    const normalizedOrigin = origin.trim();
+
     if (
-      origin.includes("amplifyapp.com") ||
-      origin.includes("localhost")
+      normalizedOrigin.includes("amplifyapp.com") ||
+      normalizedOrigin.includes("localhost") ||
+      allowedOrigins.includes(normalizedOrigin)
     ) {
       return callback(null, true);
     }
 
-    console.log("CORS blocked origin:", origin);
-    return callback(new Error(`CORS blocked for origin: ${origin}`));
+    console.log("CORS blocked origin:", normalizedOrigin);
+    console.log("Allowed origins:", allowedOrigins);
+    return callback(new Error(`CORS blocked for origin: ${normalizedOrigin}`));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
