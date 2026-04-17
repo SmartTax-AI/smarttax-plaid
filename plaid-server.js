@@ -35,7 +35,7 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
-app.options("*", cors());
+app.options(/.*/, cors());
 
 // Webhook route must be mounted before express.json()
 app.use("/api/plaid/webhook", express.raw({ type: "application/json" }));
