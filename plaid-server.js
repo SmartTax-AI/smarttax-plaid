@@ -1007,8 +1007,8 @@ const syncTransactionsToDb = async (userId, accessToken) => {
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW()
       )
-      ON CONFLICT (transaction_id)
-      DO NOTHING
+      ON CONFLICT (user_id, transaction_id)
+DO NOTHING
       `,
       [
         `classified_${tx.transaction_id}`,
@@ -1872,6 +1872,26 @@ app.post("/api/reclassify-all", async (req, res) => {
       error: "Failed to reclassify transactions",
       details: err.message,
     });
+  }
+});
+
+app.get("/fix-classified-constraint", async (req, res) => {
+  try {
+    await db.query(`
+      ALTER TABLE classified_transactions
+      DROP CONSTRAINT IF EXISTS classified_transactions_transaction_id_key
+    `);
+
+    await db.query(`
+      ALTER TABLE classified_transactions
+      ADD CONSTRAINT classified_transactions_user_id_transaction_id_key
+      UNIQUE (user_id, transaction_id)
+    `);
+
+    res.send("Constraint fixed successfully ✅");
+  } catch (error) {
+    console.error("FIX CONSTRAINT ERROR:", error);
+    res.status(500).send(error.message || "Failed to fix constraint");
   }
 });
 
