@@ -975,8 +975,6 @@ const syncTransactionsToDb = async (userId, accessToken) => {
     cursor = response.data.next_cursor;
   }
 
-  console.log("TOTAL TRANSACTIONS FETCHED:", added.length);
-
   for (const tx of added) {
     const ruleBased = await classifyTransaction(tx, userId);
     const ai = await getAISuggestion(tx);
@@ -1014,7 +1012,7 @@ const syncTransactionsToDb = async (userId, accessToken) => {
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW()
       )
       ON CONFLICT (user_id, transaction_id)
-DO NOTHING
+      DO NOTHING
       `,
       [
         `classified_${tx.transaction_id}`,
@@ -1040,8 +1038,9 @@ DO NOTHING
       ]
     );
   }
+
   console.log("TOTAL TRANSACTIONS FETCHED:", added.length);
-console.log(`[${userId}] inserted from syncTransactionsToDb:`, added.length);
+  console.log(`[${userId}] inserted from syncTransactionsToDb:`, added.length);
 
   return { added_count: added.length };
 };
