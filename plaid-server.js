@@ -19,8 +19,9 @@ const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:8080",
   "http://localhost:5173",
-  "process.env.FRONTEND_URL",
-];
+  process.env.FRONTEND_URL,
+].filter(Boolean);
+
 const OpenAI = require("openai");
 
 const openai = process.env.OPENAI_API_KEY
@@ -30,9 +31,13 @@ const openai = process.env.OPENAI_API_KEY
 const corsOptions = {
   origin(origin, callback) {
     if (!origin) return callback(null, true);
+
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
+
+    console.log("CORS blocked origin:", origin);
+    console.log("Allowed origins:", allowedOrigins);
     return callback(new Error(`CORS blocked for origin: ${origin}`));
   },
   credentials: true,
