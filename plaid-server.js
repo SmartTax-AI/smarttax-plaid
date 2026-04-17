@@ -29,31 +29,13 @@ const allowedOrigins = [
   "https://main.dgaptpd5dteqm.amplifyapp.com",
 ];
 
-const corsOptions = {
-  origin(origin, callback) {
-    if (!origin) return callback(null, true);
-
-    const normalizedOrigin = origin.trim();
-
-    if (
-      normalizedOrigin.includes("amplifyapp.com") ||
-      normalizedOrigin.includes("localhost") ||
-      allowedOrigins.includes(normalizedOrigin)
-    ) {
-      return callback(null, true);
-    }
-
-    console.log("CORS blocked origin:", normalizedOrigin);
-    console.log("Allowed origins:", allowedOrigins);
-    return callback(new Error(`CORS blocked for origin: ${normalizedOrigin}`));
-  },
-  credentials: true,
+app.use(cors({
+  origin: "*",
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
-};
+}));
 
-app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions));
+app.options("*", cors());
 
 // Webhook route must be mounted before express.json()
 app.use("/api/plaid/webhook", express.raw({ type: "application/json" }));
