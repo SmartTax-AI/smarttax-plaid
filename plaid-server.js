@@ -13,7 +13,7 @@ const {
 } = require("plaid");
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8080;
 
 const OpenAI = require("openai");
 
@@ -951,12 +951,25 @@ app.get("/api/plaid/db-items", async (req, res) => {
   }
 });
 
-const syncTransactionsToDb = async (userId, accessToken) => {
-  const response = await plaidClient.transactionsSync({
-    access_token: accessToken,
-  });
 
-  const added = response.data.added || [];
+
+const syncTransactionsToDb = async (userId, accessToken) => {
+  let cursor = null;
+  let hasMore = true;
+  const added = [];
+
+  while (hasMore) {
+    const response = await plaidClient.transactionsSync({
+      access_token: accessToken,
+      cursor: cursor || undefined,
+    });
+
+    added.push(...(response.data.added || []));
+    hasMore = response.data.has_more;
+    cursor = response.data.next_cursor;
+  }
+
+  console.log("TOTAL TRANSACTIONS FETCHED:", added.length);
 
   for (const tx of added) {
     const ruleBased = await classifyTransaction(tx, userId);
@@ -1016,7 +1029,7 @@ const syncTransactionsToDb = async (userId, accessToken) => {
         ruleBased.user_confirmed ?? null,
         JSON.stringify({
           signals: ruleBased.classification_signals || [],
-          ai_reason: null,
+          ai_reason: aiReason,
         }),
       ]
     );
@@ -1055,6 +1068,7 @@ app.post("/api/plaid/sync-transactions", async (req, res) => {
     });
   }
 });
+
 
 // Webhook
 app.post("/api/plaid/webhook", async (req, res) => {
