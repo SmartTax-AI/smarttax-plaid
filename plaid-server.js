@@ -25,10 +25,9 @@ const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:8080",
   "http://localhost:5173",
-  process.env.FRONTEND_URL,
-]
-  .filter(Boolean)
-  .map((o) => o.trim());
+  "https://main.d31qyojvcmiiqs.amplifyapp.com",
+  "https://main.dgaptpd5dteqm.amplifyapp.com",
+];
 
 const corsOptions = {
   origin(origin, callback) {
