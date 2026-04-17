@@ -607,9 +607,15 @@ app.post("/api/plaid/exchange_public_token", async (req, res) => {
 
     console.log("Saved Plaid item in DB for user:", userId);
 
+    // 🔥 run sync immediately here
+    const syncResult = await syncTransactionsToDb(userId, accessToken);
+
+    console.log("Initial sync result:", syncResult);
+
     res.json({
       success: true,
       item_id: itemId,
+      sync: syncResult,
     });
   } catch (error) {
     console.error(
@@ -1034,6 +1040,8 @@ DO NOTHING
       ]
     );
   }
+  console.log("TOTAL TRANSACTIONS FETCHED:", added.length);
+console.log(`[${userId}] inserted from syncTransactionsToDb:`, added.length);
 
   return { added_count: added.length };
 };
