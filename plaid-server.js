@@ -32,12 +32,14 @@ const corsOptions = {
   origin(origin, callback) {
     if (!origin) return callback(null, true);
 
-    if (allowedOrigins.includes(origin)) {
+    if (
+      origin.includes("amplifyapp.com") ||
+      origin.includes("localhost")
+    ) {
       return callback(null, true);
     }
 
     console.log("CORS blocked origin:", origin);
-    console.log("Allowed origins:", allowedOrigins);
     return callback(new Error(`CORS blocked for origin: ${origin}`));
   },
   credentials: true,
