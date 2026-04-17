@@ -531,13 +531,16 @@ app.post("/api/plaid/create-link-token", async (req, res) => {
     }
 
     const response = await plaidClient.linkTokenCreate({
-      user: { client_user_id: userId },
-      client_name: "SmartTax AI",
-      products: [Products.Transactions],
-      country_codes: [CountryCode.Us],
-      language: "en",
-      webhook: process.env.PLAID_WEBHOOK_URL,
-    });
+  user: { client_user_id: userId },
+  client_name: "SmartTax AI",
+  products: [Products.Transactions],
+  country_codes: [CountryCode.Us],
+  language: "en",
+  webhook: process.env.PLAID_WEBHOOK_URL,
+  transactions: {
+    days_requested: 180,
+  },
+});
 
     res.json({ link_token: response.data.link_token });
   } catch (error) {
@@ -589,15 +592,12 @@ app.post("/api/plaid/exchange_public_token", async (req, res) => {
     console.log("Saved Plaid item in DB for user:", userId);
 
     // 🔥 run sync immediately here
-    const syncResult = await syncTransactionsToDb(userId, accessToken);
-
-    console.log("Initial sync result:", syncResult);
-
     res.json({
-      success: true,
-      item_id: itemId,
-      sync: syncResult,
-    });
+  success: true,
+  item_id: itemId
+});
+
+    
   } catch (error) {
     console.error(
       "EXCHANGE TOKEN ERROR FULL:",
@@ -940,8 +940,8 @@ app.get("/api/plaid/db-items", async (req, res) => {
 
 
 
-const syncTransactionsToDb = async (userId, accessToken) => {
-  let cursor = null;
+const syncTransactionsToDb = async (userId, accessToken, itemId, savedCursor) => {
+  let cursor = savedCursor || null;
   let hasMore = true;
   const added = [];
   const modified = [];
@@ -960,6 +960,13 @@ const syncTransactionsToDb = async (userId, accessToken) => {
     hasMore = response.data.has_more;
     cursor = response.data.next_cursor;
   }
+
+  await db.query(
+    `UPDATE plaid_items
+     SET cursor = $1, updated_at = NOW()
+     WHERE item_id = $2 AND user_id = $3`,
+    [cursor, itemId, userId]
+  );
 
   for (const tx of added) {
     const ruleBased = await classifyTransaction(tx, userId);
@@ -1120,19 +1127,41 @@ app.post("/api/plaid/sync-transactions", async (req, res) => {
       return res.status(400).json({ error: "userId is required" });
     }
 
-    const accessToken = await getSavedAccessToken(userId);
+    const items = await db.query(
+      `SELECT item_id, access_token, cursor
+       FROM plaid_items
+       WHERE user_id = $1`,
+      [userId]
+    );
 
-    if (!accessToken) {
+    if (items.rows.length === 0) {
       return res.status(400).json({
-        error: "No access token found. Connect bank first.",
+        error: "No bank items found. Connect bank first.",
       });
     }
 
-    const result = await syncTransactionsToDb(userId, accessToken);
+    let totalAdded = 0;
+    let totalModified = 0;
+    let totalRemoved = 0;
+
+    for (const item of items.rows) {
+      const result = await syncTransactionsToDb(
+        userId,
+        item.access_token,
+        item.item_id,
+        item.cursor
+      );
+
+      totalAdded += result.added_count;
+      totalModified += result.modified_count;
+      totalRemoved += result.removed_count;
+    }
 
     res.json({
       success: true,
-      ...result,
+      added_count: totalAdded,
+      modified_count: totalModified,
+      removed_count: totalRemoved,
     });
   } catch (error) {
     console.error("SYNC ERROR:", error.response?.data || error.message || error);
@@ -1177,7 +1206,7 @@ app.post("/api/plaid/webhook", async (req, res) => {
   if (webhook_type === WebhookType.Transactions) {
     const row = await db
       .query(
-        "SELECT user_id, access_token FROM plaid_items WHERE item_id = $1",
+        "SELECT user_id, access_token, item_id FROM plaid_items WHERE item_id = $1",
         [item_id]
       )
       .catch(() => ({ rows: [] }));
@@ -1187,7 +1216,7 @@ app.post("/api/plaid/webhook", async (req, res) => {
       return;
     }
 
-    const { user_id, access_token } = row.rows[0];
+    const { user_id, access_token, item_id } = row.rows[0];
 
     if (
       [
@@ -1197,9 +1226,11 @@ app.post("/api/plaid/webhook", async (req, res) => {
         "HISTORICAL_UPDATE",
       ].includes(webhook_code)
     ) {
-      syncTransactionsToDb(user_id, access_token).catch((error) =>
-        console.error(`Webhook sync failed for ${user_id}:`, error.message)
-      );
+       syncTransactionsToDb(user_id, access_token, item_id).catch((error) =>
+  console.error(`Webhook sync failed for ${user_id}:`, error.message)
+);
+  
+      
     }
   }
 
