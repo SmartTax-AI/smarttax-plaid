@@ -957,6 +957,7 @@ const syncTransactionsToDb = async (userId, accessToken, itemId, savedCursor) =>
     });
 
     added.push(...(response.data.added || []));
+    console.log("Plaid added transactions:", added.length);
     modified.push(...(response.data.modified || []));
     removed.push(...(response.data.removed || []));
     hasMore = response.data.has_more;
@@ -1007,7 +1008,7 @@ const syncTransactionsToDb = async (userId, accessToken, itemId, savedCursor) =>
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),NOW()
       )
-      ON CONFLICT (transaction_id)
+      ON CONFLICT (user_id, transaction_id)
       DO UPDATE SET
         name = EXCLUDED.name,
         merchant_name = EXCLUDED.merchant_name,
