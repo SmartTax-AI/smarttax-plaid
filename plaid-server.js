@@ -1748,7 +1748,7 @@ app.get("/test-manual", async (req, res) => {
   try {
     const userId = req.query.userId || "test-user-local";
 
-    const response = await fetch("http://localhost:3001/api/manual-transaction", {
+    const response = await fetch("https://vcqfyh8463.us-east-1.awsapprunner.com/api/manual-transaction", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
