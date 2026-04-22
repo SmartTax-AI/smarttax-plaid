@@ -203,6 +203,33 @@ async function classifyTransaction(transaction, userId = null) {
     transaction.merchant_name || transaction.name || ""
   );
 
+  if (feedback.strongSignal && feedback.learnedLabel) {
+  return {
+    category: feedback.learnedLabel === "business" ? "other" : "personal",
+    confidence_score: 0.95,
+    status: "needs_review",
+    is_deductible: feedback.learnedLabel === "business",
+    deductible_label:
+      feedback.learnedLabel === "business"
+        ? "100% Deductible"
+        : "Not Deductible",
+    deduction_amount:
+      feedback.learnedLabel === "business"
+        ? transaction.amount
+        : 0,
+    tax_rate_applied: 0.3,
+    estimated_tax_savings:
+      feedback.learnedLabel === "business"
+        ? transaction.amount * 0.3
+        : 0,
+    user_confirmed: null,
+    classification_signals: [
+      "learned_from_user_feedback",
+      "strong_user_pattern"
+    ],
+  };
+}
+
   if (feedback.learnedLabel === "business") {
     if (feedback.strongSignal) {
       category =
