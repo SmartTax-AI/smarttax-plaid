@@ -1638,22 +1638,33 @@ async function getFeedbackSummary(userId, merchantName) {
 }
 
 
-app.get("/reset-bank", async (req, res) => {
+app.post("/api/plaid/reset", async (req, res) => {
   try {
-    const userId = req.query.userId;
+    const { userId } = req.body;
 
     if (!userId) {
-      return res.status(400).send("userId is required");
+      return res.status(400).json({ error: "userId is required" });
     }
 
+    // 🔥 Remove bank connection
     await db.query("DELETE FROM plaid_items WHERE user_id = $1", [userId]);
-    await db.query("DELETE FROM classified_transactions WHERE user_id = $1", [userId]);
-    await db.query("DELETE FROM manual_transactions WHERE user_id = $1", [userId]);
 
-    res.send("Bank reset done ✅");
+    // 🔥 Remove all Plaid transactions
+    await db.query("DELETE FROM classified_transactions WHERE user_id = $1", [userId]);
+
+    // 🔥 OPTIONAL: remove manual entries (ONLY if lead wants full reset)
+    // await db.query("DELETE FROM manual_transactions WHERE user_id = $1", [userId]);
+
+    return res.json({
+      success: true,
+      message: "Bank disconnected and data cleared",
+    });
   } catch (error) {
-    console.error(error);
-    res.status(500).send("Failed to reset bank");
+    console.error("RESET BANK ERROR:", error);
+    return res.status(500).json({
+      error: "Failed to reset bank",
+      details: error.message,
+    });
   }
 });
 
