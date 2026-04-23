@@ -88,6 +88,45 @@ function roundToTwo(num) {
 }
 
 async function classifyTransaction(transaction, userId = null) {
+
+    if (userId) {
+    const merchantKey = normalizeMerchantKey(
+      transaction.merchant_name || transaction.name
+    );
+
+    const recurring = await db.query(
+      `
+      SELECT recurring_type
+      FROM recurring_rules
+      WHERE user_id = $1
+        AND merchant_key = $2
+      LIMIT 1
+      `,
+      [userId, merchantKey]
+    );
+
+    if (recurring.rows.length > 0) {
+      const type = recurring.rows[0].recurring_type;
+
+      return {
+        category: type === "business" ? "other" : "personal",
+        confidence_score: 0.95,
+        status: "needs_review",
+        is_deductible: type === "business",
+        deductible_label:
+          type === "business" ? "100% Deductible" : "Not Deductible",
+        deduction_amount: type === "business" ? Number(transaction.amount || 0) : 0,
+        tax_rate_applied: 0.3,
+        estimated_tax_savings:
+          type === "business" ? Number(transaction.amount || 0) * 0.3 : 0,
+        user_confirmed: null,
+        classification_signals: [
+          "recurring_rule_match",
+          `recurring_type:${type}`
+        ],
+      };
+    }
+  }
   const merchant = (transaction.merchant_name || transaction.name || "").toLowerCase();
 
   let category = "other";
@@ -718,6 +757,8 @@ app.get("/api/plaid/transactions", async (req, res) => {
       tax_rate_applied: Number(row.tax_rate_applied || 0),
       estimated_tax_savings: Number(row.estimated_tax_savings || 0),
       user_confirmed: row.user_confirmed,
+      is_recurring: row.is_recurring || false,
+      recurring_type: row.recurring_type || null,
       classification_signals: Array.isArray(row.classification_signals)
         ? row.classification_signals
         : typeof row.classification_signals === "string"
@@ -1694,6 +1735,7 @@ app.post("/api/manual-entry", async (req, res) => {
   }
 });
 
+
 app.post("/api/manual-transaction", async (req, res) => {
   try {
     const { userId, description, amount, date, merchant_name } = req.body;
@@ -1923,6 +1965,70 @@ if (updatedTx) {
     console.error("Confirm transaction error:", err);
     return res.status(500).json({
       error: "Failed to confirm transaction",
+      details: err.message,
+    });
+  }
+});
+
+app.post("/api/transaction/mark-recurring", async (req, res) => {
+  try {
+    const { userId, merchant_name, recurring_type, transaction_id } = req.body;
+
+    // ✅ FIXED validation
+    if (!userId || !merchant_name || !recurring_type || !transaction_id) {
+      return res.status(400).json({
+        error: "userId, merchant_name, recurring_type, transaction_id required",
+      });
+    }
+
+    if (!["personal", "business"].includes(recurring_type)) {
+      return res.status(400).json({
+        error: "recurring_type must be personal or business",
+      });
+    }
+
+    const merchantKey = normalizeMerchantKey(merchant_name);
+
+    // 🔁 Save recurring rule
+    await db.query(
+      `
+      INSERT INTO recurring_rules (
+        user_id,
+        merchant_key,
+        recurring_type,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, NOW(), NOW())
+      ON CONFLICT (user_id, merchant_key)
+      DO UPDATE SET
+        recurring_type = EXCLUDED.recurring_type,
+        updated_at = NOW()
+      `,
+      [userId, merchantKey, recurring_type]
+    );
+
+    // 🔁 Update current transaction
+    await db.query(
+      `
+      UPDATE classified_transactions
+      SET
+        is_recurring = true,
+        recurring_type = $1,
+        updated_at = NOW()
+      WHERE transaction_id = $2 AND user_id = $3
+      `,
+      [recurring_type, transaction_id, userId]
+    );
+
+    return res.json({
+      success: true,
+      message: "Recurring rule saved",
+    });
+  } catch (err) {
+    console.error("Recurring error:", err);
+    return res.status(500).json({
+      error: "Failed to save recurring",
       details: err.message,
     });
   }
